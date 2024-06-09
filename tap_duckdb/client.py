@@ -4,10 +4,12 @@ This includes DuckDBStream and DuckDBConnector.
 """
 
 import sqlalchemy
-
+import typing as t
 from singer_sdk import SQLConnector, SQLStream
 from typing import Optional, Iterable, Dict, Any
-
+from singer_sdk._singerlib import CatalogEntry
+from sqlalchemy.engine import Engine
+from sqlalchemy.engine.reflection import Inspector
 
 class DuckDBConnector(SQLConnector):
     """Connects to the DuckDB SQL source."""
@@ -59,6 +61,93 @@ class DuckDBConnector(SQLConnector):
             self.create_sqlalchemy_engine()
             .connect()
         )
+
+    def discover_catalog_entry(
+        self,
+        engine: Engine,  # noqa: ARG002
+        inspected: Inspector,
+        schema_name: str,
+        table_name: str,
+        is_view: bool,  # noqa: FBT001
+    ) -> CatalogEntry:
+        catalog_entry = super().discover_catalog_entry(
+            engine,
+            inspected,
+            schema_name,
+            table_name,
+            is_view
+        )
+        catalog_entry.database = self.config["database"]
+        return catalog_entry
+
+    def discover_catalog_entries(self) -> list[dict]:
+        """Return a list of catalog entries from discovery.
+
+        Returns:
+            The discovered catalog entries as a list.
+        """
+        result: list[dict] = []
+        engine = self._engine
+        inspected = sqlalchemy.inspect(engine)
+        for schema_name in self.get_schema_names(engine, inspected):
+            # Iterate through each table and view
+
+            # Override logic to remove database if in schema name
+            parts = schema_name.split(".")
+            if len(parts) > 1:
+                schema_name = parts[1]
+
+            for table_name, is_view in self.get_object_names(
+                engine,
+                inspected,
+                schema_name,
+            ):
+                catalog_entry = self.discover_catalog_entry(
+                    engine,
+                    inspected,
+                    schema_name,
+                    table_name,
+                    is_view,
+                )
+                result.append(catalog_entry.to_dict())
+
+        return result
+
+    def parse_full_table_name(  # noqa: PLR6301
+        self,
+        full_table_name: str,
+    ) -> tuple[str | None, str | None, str]:
+        """Parse a fully qualified table name into its parts.
+
+        Developers may override this method if their platform does not support the
+        traditional 3-part convention: `db_name.schema_name.table_name`
+
+        Args:
+            full_table_name: A table name or a fully qualified table name. Depending on
+                SQL the platform, this could take the following forms:
+                - `<db>.<schema>.<table>` (three part names)
+                - `<db>.<table>` (platforms which do not use schema groupings)
+                - `<schema>.<name>` (if DB name is already in context)
+                - `<table>` (if DB name and schema name are already in context)
+
+        Returns:
+            A three part tuple (db_name, schema_name, table_name) with any unspecified
+            or unused parts returned as None.
+        """
+        # raise Exception(full_table_name)
+        db_name: str | None = None
+        schema_name: str | None = None
+
+        parts = full_table_name.split(".")
+        if len(parts) == 1:
+            table_name = full_table_name
+        if len(parts) == 2:  # noqa: PLR2004
+            schema_name, table_name = parts
+        if len(parts) == 3:  # noqa: PLR2004
+            db_name, schema_name, table_name = parts
+
+        # I need to append database to schema name since the connection isnt at the database level like expected
+        return db_name, f"{self.config['database']}.{schema_name}", table_name
 
 
 class DuckDBStream(SQLStream):

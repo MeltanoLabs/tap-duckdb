@@ -19,6 +19,12 @@ class TapDuckDB(SQLTap):
             required=True,
             description="Path to .duckdb file"
         ),
+        th.Property(
+            "database",
+            th.StringType,
+            required=True,
+            description="Database name"
+        ),
     ).to_dict()
 
 
